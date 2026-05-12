@@ -73,9 +73,14 @@ def handle_known_admin_not_authorized(user_id):
 
 
 def handle_authorized_user(user_id):
-    """Обрабатывает действия уже авторизованного пользователя."""
+    """
+    Обрабатывает действия уже авторизованного пользователя.
+    Это исправленная версия.
+    """
+    # Бот приветствует пользователя и предлагает начать создание заявки.
+    # Кнопка "Создать заявку" появляется ТОЛЬКО здесь.
     keyboard = ticket.get_keyboard(["Создать заявку"])
-    write_msg(user_id, "Вы вошли как пользователь.", keyboard=keyboard)
+    write_msg(user_id, "Вы вошли как пользователь. У Вас возникла проблема? Заполним заявку?", keyboard=keyboard)
 
 
 def handle_authorized_admin(user_id):
@@ -117,83 +122,82 @@ while True:
                 # --- ЛОГИКА: Проверяем, авторизован ли пользователь ---
                 if user_vk_id in authorized_users:
                     # Пользователь уже авторизован
-                    if authorized_users[user_vk_id] == 'admin':
-                        handle_authorized_admin(user_vk_id)
-                    else:
-                        handle_authorized_user(user_vk_id)
-                    continue  # Пропускаем остальную логику авторизации
 
-                # --- ЛОГИКА: Проверяем, ждет ли бот ввода пароля/ключа ---
-                if user_vk_id in waiting_for_input:
-                    expected_action = waiting_for_input[user_vk_id]
-                    user_data = db.get_user(user_vk_id)
+                    # --- НОВАЯ ЛОГИКА: ОБРАБОТКА СОЗДАНИЯ ЗАЯВКИ ---
+                    # Эта логика выполняется для ВСЕХ событий от авторизованных пользователей.
 
-                    if user_data is None:
-                        write_msg(user_vk_id, "Ошибка: данные пользователя не найдены.")
-                        waiting_for_input.pop(user_vk_id)
-                        continue
-
-                    stored_hash = user_data[3]
-                    role_id = user_data[4]
-                    
-                    is_correct = verify_password(message_text, stored_hash)
-
-                    if is_correct:
-                        write_msg(user_vk_id, "✅ Авторизация прошла успешно!")
-                        if role_id == 2:
-                            authorized_users[user_vk_id] = 'admin'
-                            handle_authorized_admin(user_vk_id)
-                        else:
-                            authorized_users[user_vk_id] = 'user'
-                            handle_authorized_user(user_vk_id)
-                    else:
-                        write_msg(user_vk_id, "❌ Неверный пароль или ключ доступа.")
-                    
-                    waiting_for_input.pop(user_vk_id)
-
-                else:
-                    # --- ЛОГИКА: Если это новое сообщение от неизвестного/неавторизованного ---
-                    user_from_db = db.get_user(user_vk_id)
-                    
-                    if not user_from_db:
-                        handle_new_user(user_vk_id)
-                    else:
-                        role_id = user_from_db[4]
-                        
-                        if role_id == 2: # Админ
-                            handle_known_admin_not_authorized(user_vk_id)
-                        else: # Обычный пользователь
-                            handle_known_user_not_authorized(user_vk_id)
-
-            # --- НОВАЯ ЛОГИКА: ОБРАБОТКА СОЗДАНИЯ ЗАЯВКИ ---
-            # Эта логика выполняется для ВСЕХ событий, включая нажатия кнопок
-            if event.type == VkEventType.MESSAGE_NEW and event.to_me:
-                user_vk_id = str(event.user_id)
-                message_text = event.text
-
-                # --- НАЧАЛО СОЗДАНИЯ ЗАЯВКИ (Кнопка) ---
-                if message_text == "Создать заявку":
-                    # Проверяем, что это пользователь (не админ) и он авторизован
-                    if authorized_users.get(user_vk_id) == 'user':
-                        # Вызываем функцию из ticket.py для старта процесса
+                    # 1. Если это нажатие кнопки "Создать заявку"
+                    if message_text == "Создать заявку" and authorized_users[user_vk_id] == 'user':
+                        # Начало создания заявки через модуль ticket.py
                         new_step = ticket.start_ticket_process(user_vk_id, write_msg)
                         if new_step:
                             user_ticket_step[user_vk_id] = new_step
+
+                    # 2. Если пользователь находится в процессе создания заявки (FSM)
+                    elif user_vk_id in user_ticket_step:
+                        # Передаём управление в ticket.py для обработки шага
+                        new_step = ticket.process_ticket_step(
+                            user_vk_id,
+                            message_text,
+                            user_ticket_data,
+                            user_ticket_step,
+                            write_msg
+                        )
+                        if new_step is None:  # Процесс завершён (заявка создана или ошибка)
+                            user_ticket_step.pop(user_vk_id, None)
+
+                    # 3. Если просто сообщение (не кнопка и не создание заявки)
                     else:
-                        write_msg(user_vk_id, "Эта функция доступна только пользователям.")
-                
-                # --- ПРОЦЕСС СОЗДАНИЯ ЗАЯВКИ (FSM) ---
-                elif user_vk_id in user_ticket_step:
-                    # Передаём управление в ticket.py для обработки шага
-                    new_step = ticket.process_ticket_step(
-                        user_vk_id,
-                        message_text,
-                        user_ticket_data,
-                        user_ticket_step,
-                        write_msg
-                    )
-                    if new_step is None:  # Процесс завершён (заявка создана или ошибка)
-                        user_ticket_step.pop(user_vk_id, None)
+                        # Просто выводим приветствие и клавиатуру заново,
+                        # чтобы кнопка всегда была под рукой.
+                        handle_authorized_user(user_vk_id)
+                    
+                    continue # Завершаем обработку для авторизованных
+
+                # --- ЛОГИКА: Если пользователь НЕ авторизован ---
+                else:
+                    # --- ЛОГИКА: Проверяем, ждет ли бот ввода пароля/ключа ---
+                    if user_vk_id in waiting_for_input:
+                        expected_action = waiting_for_input[user_vk_id]
+                        user_data = db.get_user(user_vk_id)
+
+                        if user_data is None:
+                            write_msg(user_vk_id, "Ошибка: данные пользователя не найдены.")
+                            waiting_for_input.pop(user_vk_id)
+                            continue
+
+                        stored_hash = user_data[3]
+                        role_id = user_data[4]
+                        
+                        is_correct = verify_password(message_text, stored_hash)
+
+                        if is_correct:
+                            write_msg(user_vk_id, "✅ Авторизация прошла успешно!")
+                            if role_id == 2:
+                                authorized_users[user_vk_id] = 'admin'
+                                handle_authorized_admin(user_vk_id)
+                            else:
+                                authorized_users[user_vk_id] = 'user'
+                                # После успешной авторизации вызываем исправленную функцию
+                                handle_authorized_user(user_vk_id)
+                        else:
+                            write_msg(user_vk_id, "❌ Неверный пароль или ключ доступа.")
+                        
+                        waiting_for_input.pop(user_vk_id)
+
+                    # --- ЛОГИКА: Если это новое сообщение от неизвестного/неавторизованного ---
+                    else:
+                        user_from_db = db.get_user(user_vk_id)
+                        
+                        if not user_from_db:
+                            handle_new_user(user_vk_id)
+                        else:
+                            role_id = user_from_db[4]
+                            
+                            if role_id == 2: # Админ
+                                handle_known_admin_not_authorized(user_vk_id)
+                            else: # Обычный пользователь
+                                handle_known_user_not_authorized(user_vk_id)
 
     except Exception as e:
         print(f"!!! КРИТИЧЕСКАЯ ОШИБКА В ЦИКЛЕ !!!")
