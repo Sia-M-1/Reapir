@@ -10,20 +10,16 @@ from config import longpoll, vk
 from utils import write_msg
 import db
 import registration
-import admin
-import ticket  # Импортируем модуль с логикой заявок
+import admin  # Импортируем модуль админ-панели
+import ticket  # Импортируем модуль заявок
 
 # --- 1. СЛОВАРИ ДЛЯ ХРАНЕНИЯ СОСТОЯНИЯ ---
 waiting_for_input = {}          # Ожидает ли пользователь ввода пароля/ключа
-authorized_users = {}          # Хранит авторизованных пользователей: user_id -> 'user'/'admin'
+authorized_users = {}          # Хранит авторизованных: user_id -> 'user'/'admin'
 
 # --- НОВОЕ: Словари для FSM (создание заявки) ---
 user_ticket_data = defaultdict(dict)  # Хранит данные заявки для каждого пользователя
 user_ticket_step = {}                  # Хранит текущий шаг FSM для пользователя
-
-# --- 2. КОНСТАНТЫ ДЛЯ ШАГОВ СОЗДАНИЯ ЗАЯВКИ ---
-# (теперь не используются напрямую, только в ticket.py)
-
 
 def get_keyboard(buttons_list):
     """Генерирует клавиатуру VK из списка названий кнопок."""
@@ -43,7 +39,6 @@ def get_keyboard(buttons_list):
             }
         ])
     return keyboard
-
 
 # --- 3. ФУНКЦИИ-ОБРАБОТЧИКИ СОСТОЯНИЙ ---
 
@@ -75,17 +70,14 @@ def handle_known_admin_not_authorized(user_id):
 def handle_authorized_user(user_id):
     """
     Обрабатывает действия уже авторизованного пользователя.
-    Это исправленная версия.
     """
-    # Бот приветствует пользователя и предлагает начать создание заявки.
-    # Кнопка "Создать заявку" появляется ТОЛЬКО здесь.
     keyboard = ticket.get_keyboard(["Создать заявку"])
     write_msg(user_id, "Вы вошли как пользователь. У Вас возникла проблема? Заполним заявку?", keyboard=keyboard)
 
 
 def handle_authorized_admin(user_id):
     """Обрабатывает действия уже авторизованного администратора."""
-    write_msg(user_id, "Вы вошли как администратор. Вам доступны функции управления заявками.")
+    admin.show_admin_menu(user_id)
 
 
 # --- 4. ФУНКЦИЯ ПРОВЕРКИ ПАРОЛЯ ---
@@ -124,39 +116,70 @@ while True:
                     # Пользователь уже авторизован
 
                     # --- НОВАЯ ЛОГИКА: ОБРАБОТКА СОЗДАНИЯ ЗАЯВКИ ---
-                    # Эта логика выполняется для ВСЕХ событий от авторизованных пользователей.
+                    if authorized_users[user_vk_id] == 'user':
+                        # 1. Если это нажатие кнопки "Создать заявку"
+                        if message_text == "Создать заявку":
+                            new_step = ticket.start_ticket_process(user_vk_id, write_msg)
+                            if new_step:
+                                user_ticket_step[user_vk_id] = new_step
 
-                    # 1. Если это нажатие кнопки "Создать заявку"
-                    if message_text == "Создать заявку" and authorized_users[user_vk_id] == 'user':
-                        # Начало создания заявки через модуль ticket.py
-                        new_step = ticket.start_ticket_process(user_vk_id, write_msg)
-                        if new_step:
-                            user_ticket_step[user_vk_id] = new_step
+                        # 2. Если пользователь находится в процессе создания заявки (FSM)
+                        elif user_vk_id in user_ticket_step:
+                            new_step = ticket.process_ticket_step(
+                                user_vk_id,
+                                message_text,
+                                user_ticket_data,
+                                user_ticket_step,
+                                write_msg
+                            )
+                            if new_step is None:  # Процесс завершён
+                                user_ticket_step.pop(user_vk_id, None)
 
-                    # 2. Если пользователь находится в процессе создания заявки (FSM)
-                    elif user_vk_id in user_ticket_step:
-                        # Передаём управление в ticket.py для обработки шага
-                        new_step = ticket.process_ticket_step(
-                            user_vk_id,
-                            message_text,
-                            user_ticket_data,
-                            user_ticket_step,
-                            write_msg
-                        )
-                        if new_step is None:  # Процесс завершён (заявка создана или ошибка)
-                            user_ticket_step.pop(user_vk_id, None)
+                        # 3. Если просто сообщение (не кнопка и не создание заявки)
+                        else:
+                            handle_authorized_user(user_vk_id)
+                    
+                    # --- ЛОГИКА: ОБРАБОТКА ДЕЙСТВИЙ АДМИНИСТРАТОРА ---
+                    elif authorized_users[user_vk_id] == 'admin':
+                        # Блок, который ты просил добавить.
+                        # Здесь обрабатываются все действия админа.
 
-                    # 3. Если просто сообщение (не кнопка и не создание заявки)
-                    else:
-                        # Просто выводим приветствие и клавиатуру заново,
-                        # чтобы кнопка всегда была под рукой.
-                        handle_authorized_user(user_vk_id)
+                        # 1. Кнопка "Посмотреть заявки"
+                        if message_text == "Посмотреть заявки":
+                            admin.list_active_tickets(user_vk_id)
+                        
+                        # 2. Кнопки заявок (Заявка 123)
+                        elif message_text.startswith("Заявка "):
+                            try:
+                                ticket_num = int(message_text.split()[1])
+                                admin.show_ticket_details(user_vk_id, ticket_num)
+                            except:
+                                write_msg(user_vk_id, "Некорректный номер заявки.")
+                        
+                        # 3. Кнопки смены статуса (Принять/Отклонить/Закрыть)
+                        elif message_text in ["Принять", "Отклонить", "Закрыть"]:
+                            # Находим последнюю просмотренную заявку для этого админа
+                            last_ticket = None
+                            for tid in admin.admin_ticket_data.get(user_vk_id, {}):
+                                last_ticket = tid
+                                break
+
+                            if last_ticket is None:
+                                write_msg(user_vk_id, "Сначала выберите заявку.")
+                                continue
+
+                            status_map = {
+                                "Принять": "В работе",
+                                "Отклонить": "Отклонена",
+                                "Закрыть": "Выполнена"
+                            }
+                            
+                            admin.change_ticket_status(user_vk_id, last_ticket, status_map[message_text])
                     
                     continue # Завершаем обработку для авторизованных
 
                 # --- ЛОГИКА: Если пользователь НЕ авторизован ---
                 else:
-                    # --- ЛОГИКА: Проверяем, ждет ли бот ввода пароля/ключа ---
                     if user_vk_id in waiting_for_input:
                         expected_action = waiting_for_input[user_vk_id]
                         user_data = db.get_user(user_vk_id)
@@ -178,14 +201,12 @@ while True:
                                 handle_authorized_admin(user_vk_id)
                             else:
                                 authorized_users[user_vk_id] = 'user'
-                                # После успешной авторизации вызываем исправленную функцию
                                 handle_authorized_user(user_vk_id)
                         else:
                             write_msg(user_vk_id, "❌ Неверный пароль или ключ доступа.")
                         
                         waiting_for_input.pop(user_vk_id)
 
-                    # --- ЛОГИКА: Если это новое сообщение от неизвестного/неавторизованного ---
                     else:
                         user_from_db = db.get_user(user_vk_id)
                         
