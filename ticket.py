@@ -17,11 +17,13 @@ def get_keyboard(buttons_list):
         "buttons": []
     }
     for button_text in buttons_list:
+        label = button_text[:39]
+        
         keyboard["buttons"].append([
             {
                 "action": {
                     "type": "text",
-                    "label": button_text,
+                    "label": label, 
                     "payload": {}
                 },
                 "color": "primary"
@@ -87,7 +89,7 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
             if result:
                 user_ticket_data[user_vk_id]['location_id'] = result[0]
                 user_ticket_step[user_vk_id] = STEP_CLASSROOM
-                write_msg_func(user_vk_id, "Пожалуйста, введите номер кабинета (например, 305 или А-102):")
+                write_msg_func(user_vk_id, "Пожалуйста, введите номер кабинета (например, 305 или Серверная):")
                 return STEP_CLASSROOM
         except Exception as e:
             print("Ошибка при обработке локации:", e)
@@ -96,7 +98,7 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
     elif current_step == STEP_CLASSROOM:
         user_ticket_data[user_vk_id]['classroom'] = message_text.strip()
         user_ticket_step[user_vk_id] = STEP_DESCRIPTION
-        write_msg_func(user_vk_id, "Пожалуйста, кратко опишите проблему:")
+        write_msg_func(user_vk_id, "Пожалуйста, кратко и своими словами опишите проблему")
         return STEP_DESCRIPTION
 
     elif current_step == STEP_DESCRIPTION:
@@ -119,7 +121,7 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
             )
             cur.execute(query, values)
             conn.commit()
-            write_msg_func(user_vk_id, "🎉 Ваша заявка успешно сохранена!")
+            write_msg_func(user_vk_id, "🎉 Ваша заявка успешно сохранена! Чтобы отправить новую заявку отправьте любое сообщение для появления кнопки Создать заявку")
         except Exception as e:
             print("Ошибка при сохранении заявки:", e)
             write_msg_func(user_vk_id, "⚠️ Произошла ошибка. Попробуйте создать заявку заново.")
