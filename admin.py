@@ -32,17 +32,16 @@ def list_active_tickets(user_id):
         conn = psycopg2.connect(**config())
         cur = conn.cursor()
         
+        # 1. ИЗМЕНЯЕМ ЗАПРОС: Добавляем JOIN с таблицей priority и выбираем priority_name
         cur.execute("""
-            SELECT t.ticket_id, u.full_name, p.priority_name, c.category_name, l.location_name, t.classroom, t.description, s.status_name
+            SELECT t.ticket_id, p.priority_name 
             FROM tickets t
-            JOIN users u ON t.user_id = u.user_id
-            JOIN priority p ON t.priority_id = p.priority_id
-            JOIN category c ON t.category_id = c.category_id
-            JOIN location l ON t.location_id = l.location_id
             JOIN status s ON t.status_id = s.status_id
+            JOIN priority p ON t.priority_id = p.priority_id
             WHERE s.status_name NOT IN ('Выполнена', 'Отклонена')
             ORDER BY t.ticket_id DESC
         """)
+        
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -51,7 +50,16 @@ def list_active_tickets(user_id):
             write_msg(user_id, "Активных заявок нет.")
             return
 
-        buttons = [f"Заявка {row[0]}" for row in rows]
+        # 2. ИЗМЕНЯЕМ ФОРМИРОВАНИЕ КНОПОК: Используем данные из запроса
+        buttons = []
+        for row in rows:
+            ticket_number = row[0]
+            priority_name = row[1]
+            
+            # Формируем строку вида "Заявка 123 (Высокий)"
+            button_text = f"Заявка {ticket_number} ({priority_name})"
+            buttons.append(button_text)
+        
         keyboard = get_keyboard(buttons)
         write_msg(user_id, "Выберите заявку для просмотра:", keyboard=keyboard)
 
