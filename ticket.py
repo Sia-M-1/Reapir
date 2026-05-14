@@ -47,7 +47,11 @@ def start_ticket_process(user_vk_id, write_msg_func):
         write_msg_func(user_vk_id, "Произошла ошибка при загрузке категорий. Попробуйте позже.")
         return None
 
-def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_step, write_msg_func):
+def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_step, write_msg_func, authorized_admins=None):
+    """
+    Обрабатывает шаги создания заявки.
+    :param authorized_admins: (опционально) Словарь authorized_users из главного цикла для отправки уведомлений.
+    """
     current_step = user_ticket_step.get(user_vk_id)
 
     if current_step == STEP_CATEGORY:
@@ -103,14 +107,18 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
 
     elif current_step == STEP_DESCRIPTION:
         user_ticket_data[user_vk_id]['description'] = message_text.strip()
+        new_ticket_id = None # Переменная для хранения ID новой заявки
+        
         try:
             conn = psycopg2.connect(**config())
             cur = conn.cursor()
             data = user_ticket_data[user_vk_id]
+            
             query = """
                 INSERT INTO tickets 
                 (user_id, category_id, location_id, status_id, creation_date, description, classroom, priority_id) 
-                VALUES (%s, %s, %s, 1, CURRENT_DATE, %s, %s, 1);
+                VALUES (%s, %s, %s, 1, CURRENT_DATE, %s, %s, 1)
+                RETURNING ticket_id; -- Эта строка вернет ID только что созданной записи
                 """
             values = (
                 user_vk_id,
@@ -120,8 +128,32 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
                 data['classroom']
             )
             cur.execute(query, values)
+            
+            # Получаем ID созданной заявки
+            new_ticket_id = cur.fetchone()[0]
+            
             conn.commit()
+            
+            # --- НОВЫЙ БЛОК: Уведомление администраторам ---
+            if new_ticket_id:
+                # Получаем список всех администраторов из БД
+                cur.execute("SELECT user_id, full_name FROM users WHERE role_id = 2") # role_id = 2 это Админ
+                admins_from_db = cur.fetchall()
+                
+                # Проходим по всем админам из базы
+                for admin_db_row in admins_from_db:
+                    admin_vk_id_db = str(admin_db_row[0]) # VK ID из БД
+                    admin_fio_db = admin_db_row[1]       # ФИО из БД
+                    
+                    # Проверяем, есть ли этот админ среди авторизованных прямо сейчас
+                    if admin_vk_id_db in authorized_admins:
+                        # Формируем и отправляем уведомление
+                        notification_msg = f"🔔 {admin_fio_db}, у вас появилась новая заявка №{new_ticket_id} (Низкий приоритет)!"
+                        write_msg(admin_vk_id_db, notification_msg)
+            
+            # Сообщение пользователю (оставляем как было)
             write_msg_func(user_vk_id, "🎉 Ваша заявка успешно сохранена! Чтобы отправить новую заявку отправьте любое сообщение для появления кнопки Создать заявку")
+
         except Exception as e:
             print("Ошибка при сохранении заявки:", e)
             write_msg_func(user_vk_id, "⚠️ Произошла ошибка. Попробуйте создать заявку заново.")
