@@ -1,6 +1,12 @@
 import vk_api
 from vk_api.longpoll import VkLongPoll, VkEventType
 
+# --- КОНФИГУРАЦИЯ ПАРОЛЕЙ ---
+# Пароль для регистрации новых пользователей
+USER_REGISTRATION_PASSWORD = "USER_PASSWORD"
+# Ключ доступа для регистрации администраторов
+ADMIN_REGISTRATION_KEY = "ADMIN_KEY"
+
 token = "TOKEN"
 
 # Авторизация
