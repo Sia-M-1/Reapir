@@ -100,14 +100,16 @@ while True:
 
                         # 2. Если пользователь находится в процессе создания заявки (FSM)
                         elif user_vk_id in user_ticket_step:
+                            # Продолжаем создание заявки
                             new_step = ticket.process_ticket_step(
                                 user_vk_id,
                                 message_text,
                                 user_ticket_data,
                                 user_ticket_step,
-                                write_msg
+                                write_msg,
+                                authorized_users  # добавляем сюда словарь authorised_users
                             )
-                            if new_step is None:  # Процесс завершён
+                            if new_step is None:
                                 user_ticket_step.pop(user_vk_id, None)
 
                         # 3. Если просто сообщение (не кнопка и не создание заявки)
