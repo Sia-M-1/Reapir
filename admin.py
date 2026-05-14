@@ -121,7 +121,7 @@ def change_ticket_status(user_id, ticket_id, new_status_name):
         conn = psycopg2.connect(**config())
         cur = conn.cursor()
         
-         # Получаем данные пользователя и категории для уведомления ИЗ ЕДИНОГО ЗАПРОСА!
+        # Получаем данные пользователя и категории для уведомления ИЗ ЕДИНОГО ЗАПРОСА!
         cur.execute("""
              SELECT t.user_id, c.category_name 
              FROM tickets t 
@@ -155,14 +155,23 @@ def change_ticket_status(user_id, ticket_id, new_status_name):
             msg_user = f"🎉 Поздравляем! Ваша заявка №{ticket_id} ({category_name}) была отработана!"
          
         write_msg(user_vk_id, msg_user)
-         
+        
+        # --- НОВАЯ ЛОГИКА: Проверяем, остались ли еще активные заявки? ---
+        # Это нужно, чтобы понять, возвращать ли в меню или просто обновить список.
+        cur.execute("SELECT COUNT(*) FROM tickets WHERE status_id != %s AND status_id != %s", (3, 4)) # 3=Выполнена, 4=Отклонена
+        active_count = cur.fetchone()[0]
+
         # Фиксируем изменения в базе данных ОДНИМ коммитом!
         conn.commit()
          
         write_msg(user_id, f"✅ Статус заявки №{ticket_id} успешно изменён на '{new_status_name}'.")
-         
-        # Обновляем список заявок для админа.
-        list_active_tickets(user_id)
+        
+        # Если заявок больше нет, возвращаем в главное меню админа
+        if active_count == 0:
+            show_admin_menu(user_id)
+        else:
+            # Если заявки еще остались, просто обновляем список
+            list_active_tickets(user_id)
         
     except Exception as e:
         print("Ошибка при изменении статуса:", e)
