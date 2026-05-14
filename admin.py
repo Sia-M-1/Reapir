@@ -1,12 +1,9 @@
 import psycopg2
 from db import config
 from utils import write_msg
-from collections import defaultdict
-
-# Словарь для хранения данных выбранного тикета у админа
-admin_ticket_data = defaultdict(dict)
 
 def get_keyboard(buttons_list):
+    """Генерирует клавиатуру VK из списка названий кнопок."""
     keyboard = {
         "one_time": False,
         "buttons": []
@@ -25,20 +22,21 @@ def get_keyboard(buttons_list):
     return keyboard
 
 def show_admin_menu(user_id):
-    """Показывает админу кнопку 'Посмотреть заявки'."""
+    """Показывает админу кнопку 'Посмотреть заявки' при входе."""
     keyboard = get_keyboard(["Посмотреть заявки"])
     write_msg(user_id, "Вы вошли как администратор. Вам доступны функции управления заявками.", keyboard=keyboard)
 
 def list_active_tickets(user_id):
-    """Выводит список активных заявок (не выполнены и не отклонены)."""
+    """Выводит список активных заявок (со статусами 'Новая' и 'В работе')."""
     try:
         conn = psycopg2.connect(**config())
         cur = conn.cursor()
-        # Только активные заявки
+        
         cur.execute("""
-            SELECT t.ticket_id, u.full_name, c.category_name, l.location_name, t.classroom, t.description, s.status_name
+            SELECT t.ticket_id, u.full_name, p.priority_name, c.category_name, l.location_name, t.classroom, t.description, s.status_name
             FROM tickets t
             JOIN users u ON t.user_id = u.user_id
+            JOIN priority p ON t.priority_id = p.priority_id
             JOIN category c ON t.category_id = c.category_id
             JOIN location l ON t.location_id = l.location_id
             JOIN status s ON t.status_id = s.status_id
@@ -53,78 +51,122 @@ def list_active_tickets(user_id):
             write_msg(user_id, "Активных заявок нет.")
             return
 
-        # Формируем кнопки по заявкам
         buttons = [f"Заявка {row[0]}" for row in rows]
         keyboard = get_keyboard(buttons)
         write_msg(user_id, "Выберите заявку для просмотра:", keyboard=keyboard)
-
-        # Сохраняем данные заявок для быстрого доступа по кнопке
-        for row in rows:
-            admin_ticket_data[user_id][row[0]] = row
 
     except Exception as e:
         print("Ошибка при получении заявок:", e)
         write_msg(user_id, "Произошла ошибка при загрузке заявок.")
 
-def show_ticket_details(user_id, ticket_id):
-    """Показывает детали выбранной заявки и кнопки для смены статуса."""
-    ticket = admin_ticket_data[user_id].get(ticket_id)
-    if not ticket:
-        write_msg(user_id, "Заявка не найдена.")
-        return
 
-    (tid, fio, category, location, classroom, description, status) = ticket
-    message = (
-        f"Заявка №{tid}\n"
-        f"Пользователь: {fio}\n"
-        f"Категория: {category}\n"
-        f"Корпус: {location}\n"
-        f"Кабинет: {classroom}\n"
-        f"Описание: {description}\n"
-        f"Статус: {status}"
-    )
-    keyboard = get_keyboard(["Принять", "Отклонить", "Закрыть"])
-    write_msg(user_id, message, keyboard=keyboard)
+def show_ticket_details(user_id, ticket_id):
+    """Показывает детали выбранной заявки и динамические кнопки для смены статуса."""
+    try:
+        conn = psycopg2.connect(**config())
+        cur = conn.cursor()
+        
+        # --- ИЗМЕНЕНО: Запрос теперь берет данные только по тому ID, который мы передали ---
+        cur.execute("""
+            SELECT u.full_name, p.priority_name, c.category_name, l.location_name, t.classroom, t.description, s.status_name
+            FROM tickets t
+            JOIN users u ON t.user_id = u.user_id
+            JOIN priority p ON t.priority_id = p.priority_id
+            JOIN category c ON t.category_id = c.category_id
+            JOIN location l ON t.location_id = l.location_id
+            JOIN status s ON t.status_id = s.status_id
+            WHERE t.ticket_id = %s
+        """, (ticket_id,))
+        
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if not row:
+            write_msg(user_id, "Заявка не найдена.")
+            return
+
+        (fio, priority, category, location, classroom, description, current_status) = row
+
+        message = (
+            f"Заявка №{ticket_id}\n"
+            f"Пользователь: {fio}\n"
+            f"Уровень приоритета: {priority}\n"
+            f"Категория: {category}\n"
+            f"Корпус: {location}\n"
+            f"Кабинет: {classroom}\n"
+            f"Описание: {description}\n"
+            f"Статус: {current_status}"
+        )
+        
+        # Логика динамических кнопок остается прежней
+        buttons_to_show = ["Назад"]
+        
+        if current_status == 'Новая':
+             buttons_to_show.extend(["Принять", "Отклонить"])
+        elif current_status == 'В работе':
+             buttons_to_show.extend(["Закрыть", "Отклонить"])
+        
+        keyboard = get_keyboard(buttons_to_show)
+        write_msg(user_id, message, keyboard=keyboard)
+        
+    except Exception as e:
+        print("Ошибка при получении деталей заявки:", e)
+        write_msg(user_id, "Произошла ошибка при загрузке деталей заявки.")
+
 
 def change_ticket_status(user_id, ticket_id, new_status_name):
     """Меняет статус заявки и отправляет уведомление пользователю."""
     try:
         conn = psycopg2.connect(**config())
         cur = conn.cursor()
-
-        # Получаем user_id пользователя, создавшего заявку
-        cur.execute("SELECT user_id FROM tickets WHERE ticket_id = %s", (ticket_id,))
-        user_row = cur.fetchone()
-        if not user_row:
+        
+         # Получаем данные пользователя и категории для уведомления ИЗ ЕДИНОГО ЗАПРОСА!
+        cur.execute("""
+             SELECT t.user_id, c.category_name 
+             FROM tickets t 
+             JOIN category c ON t.category_id = c.category_id 
+             WHERE t.ticket_id = %s
+         """, (ticket_id,))
+        ticket_info = cur.fetchone()
+        if not ticket_info:
             write_msg(user_id, "Заявка не найдена.")
             return
-        user_vk_id = user_row[0]
+             
+        user_vk_id, category_name = ticket_info
 
-        # Получаем id нового статуса
+         # Получаем id нового статуса
         cur.execute("SELECT status_id FROM status WHERE status_name = %s", (new_status_name,))
         status_row = cur.fetchone()
         if not status_row:
             write_msg(user_id, "Ошибка: статус не найден.")
             return
         new_status_id = status_row[0]
-
-        # Обновляем статус заявки
+         
+        # Обновляем статус заявки в базе данных (используем тот же курсор)
         cur.execute("UPDATE tickets SET status_id = %s WHERE ticket_id = %s", (new_status_id, ticket_id))
-        conn.commit()
-
-        # Уведомление пользователю
+         
+        # Формируем сообщение для пользователя с номером заявки и категорией
         if new_status_name == 'В работе':
-            msg_user = "🎉 Поздравляем! Ваша заявка была рассмотрена и принята в работу!"
+            msg_user = f"🎉 Поздравляем! Ваша заявка №{ticket_id} ({category_name}) была принята в работу!"
         elif new_status_name == 'Отклонена':
-            msg_user = "❌ Приносим извинения, Ваша заявка была отклонена. Попробуйте отправить новую или связаться с администратором."
+            msg_user = f"❌ Приносим извинения, Ваша заявка №{ticket_id} ({category_name}) была отклонена."
         elif new_status_name == 'Выполнена':
-            msg_user = "🎉 Поздравляем! Ваша заявка была рассмотрена и отработана! Надеемся проблема решилась!"
-        
+            msg_user = f"🎉 Поздравляем! Ваша заявка №{ticket_id} ({category_name}) была отработана!"
+         
         write_msg(user_vk_id, msg_user)
-        
-        # Уведомление админу
+         
+        # Фиксируем изменения в базе данных ОДНИМ коммитом!
+        conn.commit()
+         
         write_msg(user_id, f"✅ Статус заявки №{ticket_id} успешно изменён на '{new_status_name}'.")
+         
+        # Обновляем список заявок для админа.
+        list_active_tickets(user_id)
         
     except Exception as e:
         print("Ошибка при изменении статуса:", e)
         write_msg(user_id, "⚠️ Произошла ошибка при изменении статуса заявки.")
+    finally:
+        if conn:
+             conn.close()
