@@ -127,6 +127,10 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
             # ID созданной заявки
             new_ticket_id = cur.fetchone()[0]
             
+            cur.execute("SELECT priority_name FROM priority WHERE priority_id = %s", (data['priority_id'],))
+            priority_row = cur.fetchone()
+            priority_name = priority_row[0] if priority_row else 'Неизвестный'
+
             conn.commit()
             
             # Уведомление администраторам
@@ -142,7 +146,7 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
                     # Проверка, есть ли этот админ среди авторизованных прямо сейчас
                     if admin_vk_id_db in authorized_admins:
                         # Отправка уведомления
-                        notification_msg = f"🔔 {admin_fio_db}, у вас появилась новая заявка №{new_ticket_id} (Низкий приоритет)!"
+                        notification_msg = f"🔔 {admin_fio_db}, у вас появилась новая заявка №{new_ticket_id} (Уровень приоритета: {priority_name})!"
                         write_msg(admin_vk_id_db, notification_msg)
             
             # Сообщение пользователю (оставляем как было)
