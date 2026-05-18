@@ -111,8 +111,8 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
             
             query = """
                 INSERT INTO tickets 
-                (user_id, category_id, location_id, status_id, creation_date, description, classroom, priority_id) 
-                VALUES (%s, %s, %s, 1, CURRENT_DATE, %s, %s, 1)
+                (user_id, category_id, location_id, status_id, creation_date, description, classroom) 
+                VALUES (%s, %s, %s, 1, CURRENT_DATE, %s, %s)
                 RETURNING ticket_id; 
                 """
             values = (
@@ -127,7 +127,12 @@ def process_ticket_step(user_vk_id, message_text, user_ticket_data, user_ticket_
             # ID созданной заявки
             new_ticket_id = cur.fetchone()[0]
             
-            cur.execute("SELECT priority_name FROM priority WHERE priority_id = %s", (data['priority_id'],))
+            cur.execute("""
+                SELECT p.priority_name 
+                FROM tickets t
+                JOIN priority p ON t.priority_id = p.priority_id
+                WHERE t.ticket_id = %s
+            """, (new_ticket_id,))
             priority_row = cur.fetchone()
             priority_name = priority_row[0] if priority_row else 'Неизвестный'
 
